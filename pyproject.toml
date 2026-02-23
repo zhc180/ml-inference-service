@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml-inference-service"
+version = "0.1.0"
+description = "Project 3 scaffold: optimized ML inference service"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "pydantic>=2.7.0",
+  "prometheus-client>=0.20.0",
+  "locust>=2.29.0"
+]
+
+[tool.setuptools]
+packages = ["src", "src.server", "src.optimization", "src.monitoring"]
