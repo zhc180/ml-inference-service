@@ -1,6 +1,8 @@
 import asyncio
+from contextlib import AbstractContextManager
 from time import perf_counter
 
+from src.monitoring.metrics import observe_decode_step, observe_prefill_step
 from src.optimization.caching import KVCache
 from src.server.scheduler import Scheduler, SchedulerConfig
 from src.server.sequence import Sequence
@@ -48,16 +50,42 @@ class InferenceEngine:
 
     async def run_engine_step(self) -> None:
         """Execute one engine tick: schedule, prefill/decode, and bookkeeping."""
+        # Example:
+        # prefill_batch = self.scheduler.pop_prefill_batch()
+        # if prefill_batch:
+        #     prefill_tokens = sum(len(seq.prompt_token_ids) for seq in prefill_batch)
+        #     with self._observe_prefill_step(tokens=prefill_tokens, batch_size=len(prefill_batch)):
+        #         await self._run_prefill(prefill_batch)
+        #
+        # decode_batch = self.scheduler.pop_decode_batch()
+        # if decode_batch:
+        #     decode_tokens = len(decode_batch)  # one token/seq for single-step decode
+        #     with self._observe_decode_step(tokens=decode_tokens, batch_size=len(decode_batch)):
+        #         await self._run_decode(decode_batch)
         raise NotImplementedError
 
     async def _run_prefill(self, batch: list[Sequence]) -> None:
         """Execute model prefill for a scheduled prefill batch."""
+        # Example:
+        # tokenizer -> model forward(prefill) -> write KV blocks -> scheduler.on_prefill_complete
+        # Keep this method model-centric and avoid scheduler policy logic here.
         raise NotImplementedError
 
     async def _run_decode(self, batch: list[Sequence]) -> None:
         """Execute one decode token step for a scheduled decode batch."""
+        # Example:
+        # model forward(decode one step) -> append KV -> scheduler.on_decode_step_complete
+        # Then identify finished sequences and call _finalize_finished.
         raise NotImplementedError
 
     async def _finalize_finished(self, sequences: list[Sequence]) -> None:
         """Collect outputs and free scheduler/block resources for terminal sequences."""
         raise NotImplementedError
+
+    def _observe_prefill_step(self, tokens: int, batch_size: int) -> AbstractContextManager[None]:
+        """Context manager helper for prefill step metrics."""
+        return observe_prefill_step(tokens=tokens, batch_size=batch_size)
+
+    def _observe_decode_step(self, tokens: int, batch_size: int) -> AbstractContextManager[None]:
+        """Context manager helper for decode step metrics."""
+        return observe_decode_step(tokens=tokens, batch_size=batch_size)
