@@ -33,16 +33,16 @@ class Sequence:
 
     def total_tokens(self) -> int:
         """Return prompt + generated token count for this sequence."""
-        raise NotImplementedError
+        return len(self.prompt_token_ids) + len(self.generated_token_ids)
 
     def remaining_decode_budget(self) -> int:
         """Return how many decode tokens can still be generated."""
-        raise NotImplementedError
+        return max(self.max_new_tokens - len(self.generated_token_ids), 0)
 
     def mark_finished(self) -> None:
         """Transition sequence state to terminal finished."""
-        raise NotImplementedError
+        self.status = SequenceStatus.FINISHED
 
     def mark_aborted(self) -> None:
         """Transition sequence state to terminal aborted."""
-        raise NotImplementedError
+        self.status = SequenceStatus.ABORTED
