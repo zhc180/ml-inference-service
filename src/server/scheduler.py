@@ -1,6 +1,8 @@
+from collections import deque
 from contextlib import AbstractContextManager
 from collections.abc import Iterable
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Literal
 
 from src.monitoring.metrics import (
@@ -10,7 +12,7 @@ from src.monitoring.metrics import (
     observe_queue_wait,
     set_active_sequences,
 )
-from src.server.sequence import Sequence
+from src.server.sequence import Sequence, SequenceStatus
 
 
 @dataclass
@@ -34,33 +36,59 @@ class Scheduler:
 
     def __init__(self, config: SchedulerConfig) -> None:
         """Initialize queues and sequence index structures."""
-        # Example: self._publish_active_sequences(0)
-        raise NotImplementedError
+        self._config = config
+        self._waiting_prefill: deque[Sequence] = deque()   # new requests
+        self._waiting_decode: deque[Sequence] = deque()    # prefill done, waiting decode turn
+        self._active_sequences: dict[str, Sequence] = {}   # request_id → seq, all in-flight
+        self._publish_active_sequences(0)
 
     def add_sequence(self, sequence: Sequence) -> None:
         """Register a new sequence in WAITING_PREFILL state."""
-        # Example: self._publish_active_sequences(len(self._active_sequences))
-        raise NotImplementedError
+        self._waiting_prefill.append(sequence)
+        self._active_sequences[sequence.request_id] = sequence
+
+        self._publish_active_sequences(len(self._active_sequences))
+        
 
     def pop_prefill_batch(self) -> list[Sequence]:
         """Select the next prefill micro-batch based on policy and budgets."""
-        # Example:
-        # self._record_queue_wait("prefill", wait_seconds)
-        # with self._observe_prefill_step(tokens=prefill_tokens, batch_size=len(batch)):
-        #     ... run prefill ...
-        raise NotImplementedError
+        token_budget = self._config.max_prefill_tokens_per_step
+        batch = []
+        now = perf_counter()
+        while self._waiting_prefill and len(batch) < self._config.max_batch_size:
+            seq = self._waiting_prefill[0]
+            if len(seq.prompt_token_ids) > token_budget:
+                break
+            token_budget -= len(seq.prompt_token_ids)
+            batch.append(self._waiting_prefill.popleft())
+            seq.status = SequenceStatus.RUNNING_PREFILL
+            self._record_queue_wait("prefill", now - seq.created_at)
+
+        return batch
 
     def pop_decode_batch(self) -> list[Sequence]:
         """Select the next decode micro-batch based on policy and budgets."""
-        # Example:
-        # self._record_queue_wait("decode", wait_seconds)
-        # with self._observe_decode_step(tokens=decode_tokens, batch_size=len(batch)):
-        #     ... run decode ...
-        raise NotImplementedError
+        batch = []
+        now = perf_counter()
+        while (self._waiting_decode
+               and len(batch) < self._config.max_batch_size
+               and len(batch) < self._config.max_decode_tokens_per_step):
+            seq = self._waiting_decode[0]
+            # only as a guard, we expect sequences with zero remaining decode budget to have been marked finished and removed already
+            if seq.remaining_decode_budget() == 0:
+                self._waiting_decode.popleft()
+                self._active_sequences.pop(seq.request_id, None)
+                seq.mark_finished()
+                continue
+            batch.append(self._waiting_decode.popleft())
+            seq.status = SequenceStatus.RUNNING_DECODE
+            self._record_queue_wait("decode", now - seq.created_at)
+
+        return batch
 
     def on_prefill_complete(self, sequence: Sequence) -> None:
         """Move sequence from prefill phase into decode-ready state."""
-        raise NotImplementedError
+        raise NotImplementedError 
 
     def on_decode_step_complete(self, sequences: Iterable[Sequence]) -> None:
         """Update sequence states after one decode step for a batch."""
