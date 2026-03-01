@@ -1,19 +1,40 @@
 # ML Inference Service
 
-Project 3 from your 8-week portfolio plan.
+A lightweight, production-oriented LLM inference server built from the ground up in Python. Designed as a readable, extensible alternative to projects like [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm), with an emphasis on explicit scheduler design, observable internals, and a clean separation between memory management, scheduling, and serving.
 
-This repository is a starter scaffold for building an optimized LLM inference API with:
-- FastAPI async serving
-- Dynamic batching
-- INT8 quantization hooks
-- KV-cache management hooks
-- Prometheus metrics
-- Load testing with Locust
+## Features
 
-## Planned Milestones
+- **FastAPI async HTTP serving** — `/generate` and `/health` endpoints with Pydantic request validation
+- **Prefill/decode scheduler** — separate queues with configurable token and batch budgets per step
+- **Paged KV-cache block manager** — ref-counted block allocation with FIFO eviction and prefix reuse hooks
+- **Dynamic batching** — continuous batching across concurrent requests
+- **INT8 quantization hooks** — pluggable quantization path (bitsandbytes / ONNX / TensorRT-LLM)
+- **Prometheus metrics** — latency histograms, queue wait, block utilization, preemption counters
+- **Grafana dashboard** — pre-built panels for key inference metrics
+- **Load testing** — Locust scenarios for throughput and latency benchmarking
+- **Docker + Kubernetes** — containerized deployment with a k8s manifest
 
-- Week 5: server setup, batching, quantization basics
-- Week 6: KV-cache optimization, streaming, observability, load tests
+## Architecture
+
+```
+HTTP Request
+    │
+    ▼
+app.py          FastAPI routes (/generate, /health, /metrics)
+    │
+    ▼
+inference.py    InferenceEngine — orchestrates scheduler and block manager
+    ├── scheduler.py     Prefill/decode queue management with budget enforcement
+    ├── sequence.py      Per-request state machine (WAITING_PREFILL → FINISHED)
+    └── block_manager.py Paged KV-cache allocator with ref-counting and eviction
+
+optimization/
+    ├── caching.py       Prompt-level response cache
+    └── quantization.py  INT8 quantization entry point
+
+monitoring/
+    └── metrics.py       Prometheus counters, histograms, and gauges
+```
 
 ## Project Structure
 
@@ -21,11 +42,13 @@ This repository is a starter scaffold for building an optimized LLM inference AP
 ml-inference-service/
 ├── README.md
 ├── pyproject.toml
-├── .gitignore
 ├── src/
 │   ├── server/
 │   │   ├── app.py
 │   │   ├── inference.py
+│   │   ├── scheduler.py
+│   │   ├── sequence.py
+│   │   ├── block_manager.py
 │   │   └── batching.py
 │   ├── optimization/
 │   │   ├── quantization.py
@@ -47,6 +70,8 @@ ml-inference-service/
 
 ## Quick Start
 
+Requires Python 3.10+.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -60,18 +85,46 @@ uvicorn src.server.app:app --reload --port 8000
 curl http://localhost:8000/health
 ```
 
-### Test Generate Endpoint
+### Generate
 
 ```bash
 curl -X POST http://localhost:8000/generate \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"Hello model","max_new_tokens":32}'
+  -d '{"prompt": "Explain paged attention", "max_new_tokens": 64}'
 ```
 
-## Next Build Steps
+### Metrics
 
-1. Replace placeholder inference logic in `src/server/inference.py`.
-2. Wire continuous batching behavior in `src/server/batching.py`.
-3. Add real model quantization path in `src/optimization/quantization.py`.
-4. Add Prometheus scraping + Grafana dashboard panels.
-5. Run and record load-test benchmarks in `benchmarks/results.md`.
+```bash
+curl http://localhost:8000/metrics
+```
+
+### Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+### Load Testing
+
+```bash
+locust -f load_tests/locustfile.py --host http://localhost:8000
+```
+
+## Design Decisions
+
+**Explicit state machines.** Each request is a `Sequence` object that moves through well-defined states (`WAITING_PREFILL → RUNNING_PREFILL → WAITING_DECODE → RUNNING_DECODE → FINISHED`). State transitions are never implicit.
+
+**Separate prefill and decode budgets.** The scheduler enforces independent token and batch size limits for prefill and decode phases each engine step, following the pattern established by vLLM's continuous batching design.
+
+**Ref-counted block manager.** KV-cache blocks use reference counting to support prefix sharing across sequences. Blocks are only returned to the free pool when their ref count reaches zero, enabling safe reuse without copies.
+
+**Observable by default.** Prometheus metrics are instrumented at the scheduler, block manager, and engine loop level — queue wait times, block utilization, preemption counts, and step latencies are all tracked out of the box.
+
+## Contributing
+
+Contributions are welcome. Please open an issue before submitting a pull request for significant changes.
+
+## License
+
+MIT
