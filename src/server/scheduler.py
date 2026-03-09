@@ -47,6 +47,8 @@ class Scheduler:
         self._waiting_prefill.append(sequence)
         self._active_sequences[sequence.request_id] = sequence
 
+        sequence.status = SequenceStatus.WAITING_PREFILL
+
         self._publish_active_sequences(len(self._active_sequences))
         
 
@@ -88,16 +90,25 @@ class Scheduler:
 
     def on_prefill_complete(self, sequence: Sequence) -> None:
         """Move sequence from prefill phase into decode-ready state."""
-        raise NotImplementedError 
+        sequence.status = SequenceStatus.WAITING_DECODE
+        self._waiting_decode.append(sequence)
 
     def on_decode_step_complete(self, sequences: Iterable[Sequence]) -> None:
         """Update sequence states after one decode step for a batch."""
-        raise NotImplementedError
+        for seq in sequences:
+            if seq.remaining_decode_budget() == 0:
+                seq.mark_finished()
+            else:
+                seq.status = SequenceStatus.WAITING_DECODE
+                self._waiting_decode.append(seq)
 
     def on_sequences_finished(self, sequences: Iterable[Sequence]) -> None:
         """Finalize terminal sequences and remove from active queues."""
         # Example: self._publish_active_sequences(len(self._active_sequences))
-        raise NotImplementedError
+        for seq in sequences:
+            seq.mark_finished()
+            self._active_sequences.pop(seq.request_id, None)
+        self._publish_active_sequences(len(self._active_sequences))
 
     def preempt(self, sequence_ids: Iterable[str]) -> None:
         """Mark selected sequences as preempted and re-queue if policy allows."""
@@ -106,7 +117,7 @@ class Scheduler:
 
     def has_pending_work(self) -> bool:
         """Return whether scheduler has any sequence still in-flight."""
-        raise NotImplementedError
+        return bool(self._active_sequences)
 
     def _record_queue_wait(
         self,
