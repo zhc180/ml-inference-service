@@ -44,6 +44,9 @@ class Scheduler:
 
     def add_sequence(self, sequence: Sequence) -> None:
         """Register a new sequence in WAITING_PREFILL state."""
+        if len(self._active_sequences) >= self._config.max_active_sequences:
+            raise RuntimeError("Too many active sequences, rejecting new request")
+
         self._waiting_prefill.append(sequence)
         self._active_sequences[sequence.request_id] = sequence
 
@@ -58,11 +61,12 @@ class Scheduler:
         batch = []
         now = perf_counter()
         while self._waiting_prefill and len(batch) < self._config.max_batch_size:
-            seq = self._waiting_prefill[0]
+            seq = self._waiting_prefill.popleft()
             if len(seq.prompt_token_ids) > token_budget:
+                seq.mark_aborted() 
                 break
             token_budget -= len(seq.prompt_token_ids)
-            batch.append(self._waiting_prefill.popleft())
+            batch.append(seq)
             seq.status = SequenceStatus.RUNNING_PREFILL
             self._record_queue_wait("prefill", now - seq.created_at)
 
@@ -97,6 +101,7 @@ class Scheduler:
         """Update sequence states after one decode step for a batch."""
         for seq in sequences:
             if seq.remaining_decode_budget() == 0:
+                self._active_sequences.pop(seq.request_id, None)
                 seq.mark_finished()
             else:
                 seq.status = SequenceStatus.WAITING_DECODE
@@ -110,10 +115,26 @@ class Scheduler:
             self._active_sequences.pop(seq.request_id, None)
         self._publish_active_sequences(len(self._active_sequences))
 
-    def preempt(self, sequence_ids: Iterable[str]) -> None:
+    def preempt(self, sequence_ids: Iterable[str], *, restart_required: bool) -> None:
         """Mark selected sequences as preempted and re-queue if policy allows."""
         # Example: self._record_preemptions(count=len(preempted_ids))
-        raise NotImplementedError
+        preempted_cnt = 0
+        for seq_id in sequence_ids:
+            seq = self._active_sequences.get(seq_id)
+            if not seq or seq.status in {SequenceStatus.FINISHED, 
+                                         SequenceStatus.ABORTED, 
+                                         SequenceStatus.WAITING_PREFILL, 
+                                         SequenceStatus.WAITING_DECODE}:
+                continue
+            preempted_cnt += 1
+            if restart_required or seq.status == SequenceStatus.RUNNING_PREFILL:
+                seq.status = SequenceStatus.WAITING_PREFILL
+                self._waiting_prefill.append(seq)  # prioritize restart sequences
+            else:
+                seq.status = SequenceStatus.WAITING_DECODE
+                self._waiting_decode.append(seq)  # prioritize decode retry sequences
+            
+        self._record_preemptions(count=preempted_cnt)
 
     def has_pending_work(self) -> bool:
         """Return whether scheduler has any sequence still in-flight."""
