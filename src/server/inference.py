@@ -42,11 +42,16 @@ class InferenceEngine:
 
     def configure_scheduler(self, config: SchedulerConfig) -> None:
         """Create scheduler instance used by the internal engine loop."""
-        raise NotImplementedError
+        self.scheduler = Scheduler(config)
 
     async def submit_sequence(self, prompt: str, max_new_tokens: int) -> str:
         """Tokenize input and enqueue a new sequence; return request ID."""
-        raise NotImplementedError
+        if not self.scheduler:
+            raise RuntimeError("Scheduler not configured")
+
+        sequence = Sequence(prompt=prompt, max_new_tokens=max_new_tokens)
+        self.scheduler.add_sequence(sequence)
+        return sequence.id
 
     async def run_engine_step(self) -> None:
         """Execute one engine tick: schedule, prefill/decode, and bookkeeping."""
@@ -62,7 +67,19 @@ class InferenceEngine:
         #     decode_tokens = len(decode_batch)  # one token/seq for single-step decode
         #     with self._observe_decode_step(tokens=decode_tokens, batch_size=len(decode_batch)):
         #         await self._run_decode(decode_batch)
-        raise NotImplementedError
+        prefill_batch = self.scheduler.pop_prefill_batch() if self.scheduler else []
+        if prefill_batch:
+            prefill_tokens = sum(len(seq.prompt_token_ids) for seq in prefill_batch)
+            with self._observe_prefill_step(tokens=prefill_tokens, batch_size=len(prefill_batch)):
+                await self._run_prefill(prefill_batch)
+
+        decode_batch = self.scheduler.pop_decode_batch() if self.scheduler else []
+        if decode_batch:
+            decode_tokens = len(decode_batch)  # one token/seq for single-step decode
+            with self._observe_decode_step(tokens=decode_tokens, batch_size=len(decode_batch)):
+                await self._run_decode(decode_batch)
+
+        
 
     async def _run_prefill(self, batch: list[Sequence]) -> None:
         """Execute model prefill for a scheduled prefill batch."""
