@@ -1,11 +1,13 @@
 import asyncio
 from contextlib import AbstractContextManager
 from time import perf_counter
+from uuid import uuid4
 
 from src.monitoring.metrics import observe_decode_step, observe_prefill_step
 from src.optimization.caching import KVCache
 from src.server.scheduler import Scheduler, SchedulerConfig
 from src.server.sequence import Sequence
+from transformers import AutoTokenizer
 
 
 class InferenceEngine:
@@ -17,6 +19,9 @@ class InferenceEngine:
     def __init__(self) -> None:
         self.cache = KVCache(max_entries=1024)
         self.scheduler: Scheduler | None = None
+        self.tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
 
     async def generate(self, prompt: str, max_new_tokens: int = 64) -> dict:
         started = perf_counter()
@@ -49,9 +54,16 @@ class InferenceEngine:
         if not self.scheduler:
             raise RuntimeError("Scheduler not configured")
 
-        sequence = Sequence(prompt=prompt, max_new_tokens=max_new_tokens)
+        request_id = uuid4().hex
+        tokenized = self.tokenizer(prompt, add_special_tokens=True)
+        sequence = Sequence(
+            request_id=request_id,
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            prompt_token_ids=list(tokenized["input_ids"]),
+        )
         self.scheduler.add_sequence(sequence)
-        return sequence.id
+        return sequence.request_id
 
     async def run_engine_step(self) -> None:
         """Execute one engine tick: schedule, prefill/decode, and bookkeeping."""
