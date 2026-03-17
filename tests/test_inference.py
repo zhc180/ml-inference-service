@@ -36,15 +36,26 @@ class _FakeResponse:
 class _FakeTokenizer:
     pad_token = None
     eos_token = "<eos>"
+    loaded_model_id = None
 
     @classmethod
-    def from_pretrained(cls, _: str) -> "_FakeTokenizer":
+    def from_pretrained(cls, model_id: str) -> "_FakeTokenizer":
+        cls.loaded_model_id = model_id
         return cls()
 
     def __call__(self, prompt: str, add_special_tokens: bool = True) -> dict[str, list[int]]:
         del add_special_tokens
         tokens = [len(part) for part in prompt.split()]
         return {"input_ids": tokens or [0]}
+
+
+class _FakeModel:
+    loaded_model_id = None
+
+    @classmethod
+    def from_pretrained(cls, model_id: str) -> "_FakeModel":
+        cls.loaded_model_id = model_id
+        return cls()
 
 
 fastapi = types.ModuleType("fastapi")
@@ -62,6 +73,7 @@ sys.modules.setdefault("prometheus_client", prometheus_client)
 
 transformers = types.ModuleType("transformers")
 transformers.AutoTokenizer = _FakeTokenizer
+transformers.AutoModelForCausalLM = _FakeModel
 sys.modules.setdefault("transformers", transformers)
 
 caching = types.ModuleType("src.optimization.caching")
@@ -80,6 +92,13 @@ from src.server.scheduler import SchedulerConfig
 
 
 class InferenceEngineTests(unittest.TestCase):
+    def test_engine_eagerly_loads_small_llama_model(self) -> None:
+        engine = InferenceEngine()
+
+        self.assertEqual(_FakeTokenizer.loaded_model_id, "meta-llama/Llama-3.2-3B")
+        self.assertEqual(_FakeModel.loaded_model_id, "meta-llama/Llama-3.2-3B")
+        self.assertIs(engine.model.__class__, _FakeModel)
+
     def test_submit_sequence_tokenizes_and_enqueues_request(self) -> None:
         engine = InferenceEngine()
         engine.configure_scheduler(SchedulerConfig())

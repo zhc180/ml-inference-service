@@ -7,7 +7,9 @@ from src.monitoring.metrics import observe_decode_step, observe_prefill_step
 from src.optimization.caching import KVCache
 from src.server.scheduler import Scheduler, SchedulerConfig
 from src.server.sequence import Sequence
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+MODEL_ID = "meta-llama/Llama-3.2-3B"
 
 
 class InferenceEngine:
@@ -19,9 +21,10 @@ class InferenceEngine:
     def __init__(self) -> None:
         self.cache = KVCache(max_entries=1024)
         self.scheduler: Scheduler | None = None
-        self.tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2")
+        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model = AutoModelForCausalLM.from_pretrained(MODEL_ID)
 
     async def generate(self, prompt: str, max_new_tokens: int = 64) -> dict:
         started = perf_counter()
